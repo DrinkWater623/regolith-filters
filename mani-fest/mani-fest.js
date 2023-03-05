@@ -16,6 +16,8 @@ Information:
 Change Log:    
     20221220 - NAA - Created Basics - will figure out info for sub-packs and scripts later
     20230107 - NAA - Added ,null,4 to stringify to make not all one line
+    20230304 - NAA - Added Julian Style Build Date to the Description (make optional Later)
+                    .And default version is [yy,m,d] DW Style
 
 To Do:    
     1) Add manifest info for script API
@@ -108,7 +110,12 @@ function buildManifest(pSettings,p)
 } //end of buildManifest
 //----------------------------------------------------------------------------
 function ApplyDefaultSettings(pSettings,p){
-   
+
+    const d = new Date();
+    const dayOfYear = date => Math.floor((date - new Date(date.getFullYear(), 0, 0)) / (1000 * 60 * 60 * 24));
+    const julianBuildDateTime=d.getFullYear().toString()+'.' + dayOfYear(d).toString().padStart(3, "0")+'.'+d.getHours().toString().padStart(2, "0")+'.'+d.getMinutes().toString().padStart(2, "0");
+
+
     if (!("name" in pSettings)) {
         if ("name" in jsonObject){
             pSettings.name = jsonObject.name + " " + p
@@ -122,12 +129,14 @@ function ApplyDefaultSettings(pSettings,p){
         }
         else {pSettings.description = "This " + p + " pack does amazing things"}
     }
+    
+    pSettings.description = pSettings.description+"\nBuild Date: " + julianBuildDateTime
 
     if (!("version" in pSettings)) {
         if ("version" in jsonObject){
             pSettings.version = jsonObject.version
         }
-        else {pSettings.version = [1, 0, 0]}
+        else {pSettings.version = [d.getFullYear()-2000, d.getMonth()+1, d.getDate()]}
     }
 
     if (!("min_engine_version" in pSettings)) {
