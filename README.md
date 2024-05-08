@@ -1,1 +1,1 @@
-# regolith-filters
+Note to self - VS-Code workspace (GitHub) - for when you forget where it is... (Projects Folder)
