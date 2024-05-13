@@ -1,11 +1,18 @@
+// @ts-check
+//WORK IN PROGRESS to Add Multiple servers and scrape for version numbers
 let isDebug = false
 //VS Code Colors
 const fg_Reset = '\x1b[0m'
 const fg_Error = '\x1b[91m%s'
+const fg_ErrorNext = fg_Error+fg_Reset
 const fg_Warning = '\x1b[31m%s'
+const fg_WarningNext = fg_Warning+fg_Reset
 const fg_Success = '\x1b[32m%s'
+const fg_SuccessNext = fg_Success+fg_Reset
 const fg_General = '\x1b[36m%s'
+const fg_GeneralNext = fg_General+fg_Reset
 const fg_Debug = '\x1b[95m%s'
+const fg_DebugNext = fg_Debug+fg_Reset
 /*
 Information:
     Author:     DrinkWater623/PinkSalt623
@@ -26,6 +33,8 @@ Change Log:
     20230304 - NAA - Added Julian Style Build Date to the Description (make optional Later)
                     Added default version is [yy,m,d] DW Style
     20240429 - NAA - Added Scripting stuff
+    20240509 Working on multi @minecraft dependencies
+    20240512 - NAA - Ability to grab author from config.json
 
 To Do:
     () multi-ser server in settings, take in as array and get versions for each    
@@ -36,11 +45,12 @@ To Do:
 //=====================================================================
 const fs = require("fs");
 const myUUID = require("crypto");
+var argPath = process.argv[1];
 var argSettings = process.argv[2];
 const cmdLineSettingsJson = JSON.parse(argSettings);
 var minecraftScrapeData;
 var scrapeServer;
-//var minEngineVersion
+var configFile;
 //var latestStableScriptingVersion
 
 main();
@@ -67,8 +77,8 @@ function masterDefaultSettings(){
     if(isDebug) console.log(fg_Debug,"* Master Default Settings",fg_Reset)    
 
     //conform - later add FORCE
-    if(!"bp_only" in cmdLineSettingsJson) cmdLineSettingsJson.bp_only = false
-    if(!"rp_only" in cmdLineSettingsJson) cmdLineSettingsJson.rp_only = false
+    cmdLineSettingsJson.bp_only = false || cmdLineSettingsJson.bp_only
+    cmdLineSettingsJson.rp_only = false || cmdLineSettingsJson.rp_only
     
     //per User
     if (cmdLineSettingsJson.rp_only && cmdLineSettingsJson.bp_only) {            
@@ -78,6 +88,7 @@ function masterDefaultSettings(){
     //Change based on conditions
     //Other exists    
 
+    //This may fail if folder does not exist - test and see ts-compiler for upgraded functions
     cmdLineSettingsJson.rp_only = cmdLineSettingsJson.rp_only || isEmptyFolder("BP")
     cmdLineSettingsJson.bp_only = cmdLineSettingsJson.bp_only || isEmptyFolder("RP")    
 
@@ -94,11 +105,13 @@ function masterDefaultSettings(){
         console.log("==> RP manifest only")
         cmdLineSettingsJson.dependencies = false ;
         cmdLineSettingsJson.scripting = false;
+        if("BP" in cmdLineSettingsJson) delete cmdLineSettingsJson.BP
     }
     //user can set to true/false, otherwise assume true if both
     if(!("dependencies" in cmdLineSettingsJson)) cmdLineSettingsJson.dependencies = true;
     //Reasons to cancel/deny
     if(cmdLineSettingsJson.dependencies){
+        //later go get the UUID from those manifest... 
         cmdLineSettingsJson.dependencies = !fs.existsSync("BP/manifest.json")
         cmdLineSettingsJson.dependencies = cmdLineSettingsJson.dependencies && !fs.existsSync("RP/manifest.json")        
         if(!cmdLineSettingsJson.dependencies) console.log("==> Cannot do dependencies if you make your own manifest.json!")
@@ -107,8 +120,7 @@ function masterDefaultSettings(){
     
     //------------------------------------------------------------------------------------------
     //default to true since it will not override user provided UUIDs, user must specify false to exclude
-    if (!("getUUIDs" in cmdLineSettingsJson)) cmdLineSettingsJson.getUUIDs = true 
-    if (!(cmdLineSettingsJson.getUUIDs === false)) cmdLineSettingsJson.getUUIDs = true;
+    cmdLineSettingsJson.getUUIDs =  !!cmdLineSettingsJson.getUUIDs
     //------------------------------------------------------------------------------------------
     if (!("BP" in cmdLineSettingsJson)) { cmdLineSettingsJson.BP = {} };
     if (!("RP" in cmdLineSettingsJson)) { cmdLineSettingsJson.RP = {} }; 
@@ -126,12 +138,15 @@ function masterDefaultSettings(){
     console.log("==> Scripting:",cmdLineSettingsJson.scripting ? "Verified" : "None")
     cmdLineSettingsJson.BP.scripting = cmdLineSettingsJson.scripting;
     cmdLineSettingsJson.RP.scripting = false;
+
+    cmdLineSettingsJson.author = cmdLineSettingsJson.author || getConfigFileAuthor() || "Add Author Name Here";        
 }
-//----------------------------------------------------------------------------
+//================================================================================================
 function ApplyDefaultSettings(pSettings) {
     if(isDebug) console.log(fg_Debug,"* ApplyDefaultSettings(",pSettings.type,")",fg_Reset)    
     let p = pSettings.type;
     const d = new Date();
+    //@ts-ignore
     const dayOfYear = date => Math.floor((date - new Date(date.getFullYear(), 0, 0)) / (1000 * 60 * 60 * 24));
     const julianBuildDateTime = d.getFullYear().toString() + '.' + dayOfYear(d).toString().padStart(3, "0") + '.' + d.getHours().toString().padStart(2, "0") + '.' + d.getMinutes().toString().padStart(2, "0");
 
@@ -160,11 +175,36 @@ function ApplyDefaultSettings(pSettings) {
         let mcPrefix = "@minecraft/"
 
         let list = {
-            script_entry:"scripts/main.js",  //need to check for alt names
             script_uuid:"get",
+            script_entry:"scripts/main.js",  //need to check for alt names
             scripting_module_name:mcPrefix + "server", //may need to have more than one of these (server/version key/pair)
             scripting_version:"get"
         }
+        /*
+            need it to look like this and be able to handle all of these scenarios
+            1) string
+                "@minecraft/server"
+            3) object
+                {
+                    module:@minecraft/server,
+                    version : "get"  or actual version
+                }
+            2) array of string
+                ["@minecraft/server","@minecraft/server-uid",@minecraft/common]
+            4) array of objects
+            [
+                {
+                    module:@minecraft/server,
+                    version : "get"  or actual version
+                },
+                {
+                    module:@minecraft/server-ui,
+                    version : "get"  or actual version
+                }
+
+            ]
+            5) just an idea, but scrape scripts and look for which to get.
+        */
         for (const property in list){
             // omitted
             if (!(property in pSettings)) pSettings[property] = list[property]
@@ -219,7 +259,7 @@ function buildManifest(pSettings) {
         "modules": [
             {
                 "type": `${pSettings.ModuleType}`,
-                "description": "_",
+                //"description": "_",
                 "uuid": `${pSettings.module}`,
                 "version": [1, 0, 0]
             }
@@ -227,15 +267,15 @@ function buildManifest(pSettings) {
     }
     
     if (pSettings.scripting) {
-        manifest.modules.push(
-            {
-                "type": "script",
-                "language":"javascript",
-                "uuid": `${pSettings.script_uuid}`, // note this should be one time, if using dynamic properties
-                "version": [1, 0, 0],
-                "entry": `${pSettings.script_entry}`,
-            }
-        );
+        //@ts-ignore
+        let addMod = {
+            "type": "script",
+            "language":"javascript",
+            "uuid": `${pSettings.script_uuid}`, // note this should be one time, if using dynamic properties
+            "version": [1, 0, 0],
+            "entry": `${pSettings.script_entry}`,
+        }
+        manifest.modules.push(addMod);
         manifest.capabilities = ["script_eval"];
     }
 
@@ -257,9 +297,9 @@ function buildManifest(pSettings) {
     }
 
     manifest.metadata = {
-        "authors": [cmdLineSettingsJson.author || "Add Name Here"],
+        "authors": [pSettings.author || cmdLineSettingsJson.author],
         "generated_with": {
-            "regolith_filter_mani_fest": ["24.5.4"]
+            "regolith_filter_mani_fest": ["24.5.12"]
         }
     }
 
@@ -302,11 +342,10 @@ function manifestRedirect(){
             }
         }
         //[x,x,x]
-        const orderedKeys = keys.map(v => v.substring(0,v.length-7)).reverse()
-        minEngineVersion = orderedKeys[0];
+        const orderedKeys = keys.map(v => v.substring(0,v.length-7)).reverse()        
 
         const settingsList = [bpSettings,rpSettings].filter(json => json.min_engine_version.startsWith("get"))
-        for(json of settingsList) {
+        for(let json of settingsList) {
             let verNum = 0
             
             if (json.min_engine_version.startsWith("get-")) {
@@ -398,20 +437,141 @@ function minecraft_scrape(){
             return response.json();
         })
         .then(data => {
-            console.log(fg_Success,"==> Data Retrieved",fg_Reset)    
+            console.log(fg_SuccessNext,"==> Data Retrieved")    
             minecraftScrapeData = data;                        
             manifestRedirect();
         })       
         .catch(error => {
             console.error('Fetch error:', error);
         });
-    if (isDebug) console.log(fg_Debug,"x Out-Of-Sync minecraft_scrape()",fg_Reset)
+    if (isDebug) console.log(fg_DebugNext,"x Out-Of-Sync minecraft_scrape()")
+}
+//=======================================================================
+function jsonParseRemovingComments(text){
+    let isDebugMe = false;
+    if(isDebugMe) console.log(fg_DebugNext,"* jsonParseRemovingComments()")
+    //text is a string, not JSON.. which obviously does not need this function
+    let dataString = text;
+
+    //1) Remove all /* */    
+    while (dataString.indexOf("/*") >= 0){
+
+        let ptrStart = dataString.indexOf("/*");
+        let front = ptrStart <= 0 ? "" : dataString.substring(0,ptrStart-1);
+
+        let back = dataString.substring(ptrStart+2);
+        let ptrEnd = back.indexOf("*/");
+
+        if (ptrEnd == -1)
+            dataString = front;
+        else {
+            back = back.substring(ptrEnd+2);
+            dataString = front + back;
+        }
+    }
+    // remove //->end of line  ??  char(10 and 13)  ?? or just one or either
+
+    let dataJson;
+    let more;
+    do {
+        more = false;
+        try {
+            dataJson = JSON.parse(dataString);;
+        } catch (err) {
+            more = true;
+            if(isDebugMe) console.log(fg_Error,"err.name",err.name,"err.message=",err.message,fg_Reset)
+            let errTrapArray = [
+                "Expected double-quoted property name in JSON at position ",
+                "Expected property name or '}' in JSON at position "
+            ]
+            let errTrap="xxxxx";
+            for(let i = 0; i < errTrapArray.length; i++) {
+                if(err.message.startsWith(errTrapArray[i])) {
+                    errTrap = errTrapArray[i]
+                    break
+                };
+            }
+
+            if (err.message.startsWith(errTrap)) {
+                let ptr = parseInt(err.message.substring(errTrap.length))
+    
+                let front = dataString.substring(0,ptr-1)
+                let back = dataString.substring(ptr)
+                let ptrEOL = back.indexOf("\n");
+
+                if(ptrEOL >= 0){
+                    back = back.substring(ptrEOL+1);
+                    dataString = front + back;
+                }
+                else {
+                    dataString = front;
+                }                
+            }
+            else {
+                console.log(fg_WarningNext,"Error: JSON Parse Error Not Configured",err.message);
+                if(isDebugMe) console.log(fg_WarningNext,"x jsonParseRemovingComments()")
+                return null;
+            }
+        }
+    }
+    while(more);
+
+    if(isDebugMe) console.log(fg_SuccessNext,"x jsonParseRemovingComments()")
+    return dataJson
+}
+//=======================================================================
+function getConfigFileAuthor(){
+    let isDebugMe=false;
+    if(isDebugMe) console.log(fg_DebugNext,"* getConfigFileAuthor()")
+    /*
+        Known, this filter is either under 
+            ./.regolith or
+            ./filters
+        of the mail project folder
+    */
+    let path_1 = "\\.regolith\\cache\\filters\\"
+    let path_2 = "\\filters\\"
+    let ptr = (argPath.lastIndexOf(path_1) > 0 ? argPath.lastIndexOf(path_1) : argPath.lastIndexOf(path_2)) + 1;
+
+    if (!ptr) {
+        console.log(fg_WarningNext,"Error: Cannot find path to config.sys to get author, skipping");
+        if(isDebugMe) console.log(fg_DebugNext,"x getConfigFileAuthor()")
+        return null;
+    }
+
+    let configPathFilename = argPath.substring(0,ptr) + "config.json";
+    let configData;
+    try {
+        const data = fs.readFileSync(configPathFilename, 'utf8');
+        configData = data;
+    } catch (err) {
+        console.log(fg_WarningNext,"Error: Cannot read config.sys to get author, skipping");
+        if(isDebugMe) console.log(fg_DebugNext,"x getConfigFileAuthor()")
+        return null;
+    }
+
+    if(!configData.search("\"author\"")) {
+        console.log(fg_WarningNext,"Error: Cannot find word author in config.sys to get author, skipping");
+        if(isDebugMe) console.log(fg_DebugNext,"x getConfigFileAuthor()")
+        return null;
+    }
+
+    let configJson
+    configJson = jsonParseRemovingComments(configData)
+    if(!configJson) {
+        console.log(fg_WarningNext,"Error: Cannot parse config.sys to get author, skipping");
+        if(isDebugMe) console.log(fg_DebugNext,"x getConfigFileAuthor()")
+        return null;
+    }
+
+    console.log(fg_SuccessNext,"==> found author =",configJson.author)
+    return configJson.author;
 }
 //=======================================================================
 function main(){
-    // Defaults and Overrides
-    if("debug" in cmdLineSettingsJson) if (cmdLineSettingsJson.debug) isDebug = true;
-
+    isDebug = !!cmdLineSettingsJson.debug || isDebug;    
+    if (isDebug) console.log(fg_DebugNext,"* main()")
+    
     masterDefaultSettings();
 
     //Append Setting Defaults
@@ -449,7 +609,10 @@ function main(){
     else {
         manifests();
         mainEnd();
-    }    
+    }
+
+    if (isDebug) console.log(fg_DebugNext,"x main()")
+    
 }
 //=======================================================================
 function mainEnd(){
@@ -461,10 +624,10 @@ function mainEnd(){
         else
         if (cmdLineSettingsJson.rp_only) fs.writeFileSync("RP/debug.ConfigSettings.json", JSON.stringify(cmdLineSettingsJson));
 
-        console.log(fg_Debug,"Debug Files Exported",fg_Reset);
+        console.log(fg_DebugNext,"Debug Files Exported");
     }
 
-    console.log(fg_Success,"x Mani-Fest Regolith Filter",fg_Reset)
+    console.log(fg_SuccessNext,"x Mani-Fest Regolith Filter")
 }
 // End of Main   
 //============================================================================
