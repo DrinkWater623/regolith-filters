@@ -5,13 +5,9 @@
 const fs = require("fs");
 const fileInfo = require('path');
 const myUUID = require("crypto");
-
+//=====================================================================
 var argPath = process.argv[ 1 ];
 var argSettings = process.argv[ 2 ];
-const cmdLineSettingsJson = JSON.parse(argSettings);
-let isDebug = !!cmdLineSettingsJson.Debug;
-let isDebugMax = !!cmdLineSettingsJson.DebugMax;
-if (isDebugMax) isDebug = true;
 //=====================================================================
 /*
 Information:
@@ -42,6 +38,7 @@ Change Log:
     20240612 - NAA - bug... when no pack dependencies per user.
     20240622 - NAA - bug... when min_engine_version is not a string
     20240624 - NAA = ad "capabilities": ["script_eval"],
+    20240728 - NAA - global settings inside confile.json  "mani_fest":{}  outside of "regolith": {}
 TODO:
     () Make is so I can have a dev and rel pack icon - prob can use the data section to hold and use by name or settings has filename
 */
@@ -242,7 +239,7 @@ class Debug {
         }
 
         let isWarning = false;
-        let isError = false;        
+        let isError = false;
         let isSuccess = false;
         let colorNumber = this.#colorNumberGet(color);
 
@@ -304,6 +301,7 @@ class is {
     static function (candidate) { return typeof candidate === "function"; }
     static null (candidate) { return Object.is(candidate, null); }
     static number (candidate) { return typeof candidate === "number" || typeof candidate === "bigint"; }
+    static objectObject (candidate) { return candidate && typeof candidate === "object" && is.notArray(candidate); }
     static object (candidate) { return typeof candidate === "object"; }
     static string (candidate) { return typeof candidate === "string"; }
     static symbol (candidate) { return typeof candidate === "symbol"; }
@@ -460,9 +458,9 @@ class FetchSiteJsonStack {
     #fetchNext () {
         if (this.fetchStack.length === 0) return;
 
-        
+
         let errCode = this.#colorString("error");
-        let warnCode = this.#colorString("warn");        
+        let warnCode = this.#colorString("warn");
         let successCode = this.#colorString("success");
 
         let newFetch = this.fetchStack.shift();
@@ -624,6 +622,10 @@ class McModuleFetchStack extends FetchSiteJsonStack {
 // Global variables - Part 2
 //=====================================================================
 //const scriptsFolder = "BP/scripts";
+let isDebug = false;
+let isDebugMax = false;
+//=====================================================================
+
 let bpFiles = [];
 let rpFiles = [];
 const validScriptModules = [];
@@ -631,6 +633,7 @@ validScriptModules.push({ module_name: "@minecraft/server", total: 0 });
 validScriptModules.push({ module_name: "@minecraft/server-ui", total: 0 });
 validScriptModules.push({ module_name: "@minecraft/common", total: 0 });
 validScriptModules.push({ module_name: "minecraft-bedrock-server", total: 0 });
+const validVersionNames = [ "get", "stable", "beta", "rc", "preview", "previewbeta", "latest", "latestbeta", "latest_beta", "preview_beta", "latest-beta", "preview-beta" ];
 // Console Logging
 const debug = new Debug(isDebug);
 debug.colorsAdded.set("functionStart", 96);
@@ -640,6 +643,19 @@ debug.colorsAdded.set("log", 40);
 
 const debugMax = new Debug(isDebugMax);
 debugMax.colorsAdded.set("log", 95);
+
+const configFileSettings = { settings: {} };
+getConfigFileSettings();
+
+const cmdLineSettingsJson = mergeDeep(configFileSettings.settings, JSON.parse(argSettings));
+debug.log(cmdLineSettingsJson);
+
+//const cmdLineSettingsJson = JSON.parse(argSettings);
+//=====================================================================
+isDebug = isDebug || !!cmdLineSettingsJson.Debug;
+isDebugMax = isDebugMax || !!cmdLineSettingsJson.DebugMax;
+if (isDebugMax) isDebug = true;
+debug.debugOn = isDebug;
 
 const consoleColor = new Debug(!cmdLineSettingsJson.Silent);
 consoleColor.colorsAdded.set("highlight", 93);
@@ -651,6 +667,27 @@ let myFetch; //leave as let, defined if use, needs to be global, as will be new 
 //=====================================================================
 //          Function Library
 //=====================================================================
+/**
+ * Deep merge two objects.
+ * @param {object} target
+ * @param {object} source
+ * @returns {object}
+ */
+function mergeDeep (target, source) {
+
+    if (is.object(target) && is.object(source)) {
+        for (const key in source) {
+            if (is.object(source[ key ])) {
+                if (!target[ key ]) Object.assign(target, { [ key ]: {} });
+                mergeDeep(target[ key ], source[ key ]);
+            } else {
+                Object.assign(target, { [ key ]: source[ key ] });
+            }
+        }
+    }
+    return target;
+}
+
 function deleteCommentBlockSameLine (string = "") {
     if (typeof string !== "string") return string;
 
@@ -1188,7 +1225,7 @@ function configureScriptingDependencies () {
     const userModule_nameList = userModule_nameObjs.map(obj => obj.module_name);
     const allowedModObjs = [];
     bpSettings.jsModList.forEach((/** @type {any} */ v) => {
-        if (!userModule_nameList.includes(v)) allowedModObjs.push({ module_name: v, version: "stable" });
+        if (!userModule_nameList.includes(v)) allowedModObjs.push({ module_name: v, version: "get" });
     });
 
     bpSettings.dependencies = [];
@@ -1276,8 +1313,8 @@ function jsonParseRemovingComments (text) {
     return dataJson;
 }
 //=======================================================================
-function getConfigFileAuthor () {
-    debug.log("==> getConfigFileAuthor()");
+function getConfigFileSettings () {
+    debug.log("==> getConfigFileSettings()");
     /*
         Known, this filter is either under 
             ./.regolith or
@@ -1289,9 +1326,9 @@ function getConfigFileAuthor () {
     let ptr = (argPath.lastIndexOf(path_1) > 0 ? argPath.lastIndexOf(path_1) : argPath.lastIndexOf(path_2)) + 1;
 
     if (!ptr) {
-        Debug.warn("Error: Cannot find path to config.sys to get author, skipping");
-        debugMax.error("x getConfigFileAuthor()");
-        return null;
+        Debug.warn("Error: Cannot find path to config.json");
+        debugMax.error("x getConfigFileSettings()");
+        return false;
     }
 
     let configPathFilename = argPath.substring(0, ptr) + "config.json";
@@ -1300,34 +1337,36 @@ function getConfigFileAuthor () {
         const data = fs.readFileSync(configPathFilename, 'utf8');
         configData = data;
     } catch (err) {
-        Debug.warn("Error: Cannot read config.sys to get author, skipping");
-        debugMax.warn("x getConfigFileAuthor()");
-        return null;
+        Debug.warn("Error: Cannot read config.json, skipping");
+        debugMax.warn("x getConfigFile()");
+        return false;
     }
 
-    if (!configData.search("\"author\"")) {
-        Debug.warn("Error: Cannot find word author in config.sys to get author, skipping");
-        debugMax.warn("x getConfigFileAuthor()");
-        return null;
-    }
-
-    let configJson;
     //configData = deleteComments(configData) Do not use... prob with // in $schema withing " "
-    configJson = jsonParseRemovingComments(configData);
-    if (!configJson) {
-        Debug.warn("Error: Cannot parse config.sys to get author, skipping");
-        debugMax.warn("x getConfigFileAuthor()");
-        return null;
+    let json = jsonParseRemovingComments(configData);
+    if (!json) {
+        Debug.warn("Error: Cannot parse config.json, skipping");
+        debugMax.warn("x getConfigFile()");
+        return false;
     }
 
-    Debug.success("==> found author: " + configJson.author);
-    debugMax.mute("<== getConfigFileAuthor()");
+    configFileSettings.author = json.author;
+    if (json.mani_fest) {
+        configFileSettings.settings = json.mani_fest;
+    }
 
-    return configJson.author;
+
+    debugMax.mute("<== getConfigFile()");
+
+    return true;
 }
 //=======================================================================
 function masterConfigSettingsCheck () {
     debug.color("functionStart", "* masterConfigSettingsCheck()");
+
+    if (!cmdLineSettingsJson.beta && typeof cmdLineSettingsJson.beta != "boolean") cmdLineSettingsJson.beta = false;
+    if (!cmdLineSettingsJson.preview && typeof cmdLineSettingsJson.preview != "boolean") cmdLineSettingsJson.preview = false;
+
 
     cmdLineSettingsJson.moduleFetchList = [];
     for (let type of [ "BP", "RP" ]) {
@@ -1344,7 +1383,7 @@ function masterConfigSettingsCheck () {
         cmdLineSettingsJson[ type ].type = type;
     }
     //------------------------------------------------------------------------------------------
-    cmdLineSettingsJson.author = cmdLineSettingsJson.author || getConfigFileAuthor() || "Add Author Name Here";
+    cmdLineSettingsJson.author = cmdLineSettingsJson.author || configFileSettings.author || "Add Author Name Here";
     //------------------------------------------------------------------------------------------
     //----------------------------------------
     //Determine if BP and RP Exist
@@ -1424,16 +1463,25 @@ function manifestHeaders_set (pSettings) {
 
     const d = new Date();
     const DateTime = [ d.getFullYear(), d.getMonth() + 1, d.getDate(), d.getHours(), d.getMinutes(), d.getSeconds() ].join('.');
+
+    const packType = ((cmdLineSettingsJson.preview ? "§cPreview§r: " : "") + (cmdLineSettingsJson.beta ? "§6Beta§r: " : "")).trim();
+
     const defaultHeader = {
-        name: pSettings.name || cmdLineSettingsJson.name + " " + pSettings.type || "My UnNamed Pack " + pSettings.type,
+        name: (
+            pSettings.name ||
+            packType + ' ' + cmdLineSettingsJson.name + ' ' + pSettings.type ||
+            packType + ' ' + configFileSettings.name + pSettings.type
+        ).trim().replace('  ', ' '),
         description: (
-            pSettings.description ||
-            cmdLineSettingsJson.description + " " + pSettings.type ||
-            "<" + pSettings.type + " pack description here>")
-            + "\nBuild Date: " + DateTime,
+            (
+                pSettings.description ||
+                    pSettings.isScriptingFiles && cmdLineSettingsJson.beta ? "§6Requires Beta API§r" : '' + cmdLineSettingsJson.description + ' ' + pSettings.type ||
+                "<" + pSettings.type + " pack description here>")
+            + "\n§aBuild Date: " + DateTime+"§r"
+        ).trim().replace('  ', ' '),
         uuid: pSettings.header_uuid || "new",
         version: pSettings.version || cmdLineSettingsJson.version || [ d.getFullYear() - 2000, d.getMonth() + 1, d.getDate() ],
-        min_engine_version: pSettings.min_engine_version || cmdLineSettingsJson.min_engine_version || "stable"
+        min_engine_version: pSettings.min_engine_version || cmdLineSettingsJson.min_engine_version || "get"
     };
     const configHeader = {} || pSettings.header;
     pSettings.header = objectsMerge(configHeader, defaultHeader);
@@ -1525,7 +1573,10 @@ function manifestScriptModule_set (bpSettings) {
             language: "javascript",
             uuid: bpSettings.module_uuid || "get",
             version: [ 1, 0, 0 ],
-            entry: isFile("BP/scripts/index.js") ? "scripts/index.js" : isFile("BP/scripts/main.js") ? "scripts/main.js" : "Name/Path of your entry Script File Here"
+            entry:  !!bpSettings.js ? (`scripts/${bpSettings.js}.js`).replace('.js.js','.js') : 
+                    isFile("BP/scripts/index.js") ? "scripts/index.js" : 
+                    isFile("BP/scripts/main.js") ? "scripts/main.js" : 
+                    "Name/Path of your entry Script File Here"
         };
 
         bpSettings.module_script = objectsMerge(configScriptModule, defaultScriptModule);
@@ -1584,14 +1635,14 @@ function manifestBuild (pSettings) {
         modules: [ pSettings.module_pack ]
     };
     if (pSettings.module_script) manifest.modules.push(pSettings.module_script);
-    if (pSettings.isScriptingFiles && (pSettings.script_eval || cmdLineSettingsJson.script_eval)) manifest.capabilities = ["script_eval"]    
+    if (pSettings.isScriptingFiles && (pSettings.script_eval || cmdLineSettingsJson.script_eval)) manifest.capabilities = [ "script_eval" ];
     if (pSettings.dependencies?.length) manifest.dependencies = pSettings.dependencies;
     //if (pSettings.dependencies && pSettings.dependencies.length) manifest.dependencies = pSettings.dependencies;
 
     manifest.metadata = {
         "authors": [ pSettings.author || cmdLineSettingsJson.author ],
         "generated_with": {
-            "regolith_filter_mani_fest": [ "24.6.4" ]
+            "regolith_filter_mani_fest": [ "24.7.28" ]
         }
     };
 
@@ -1667,27 +1718,27 @@ function fetchInfoApply () {
 
     let keyWord = "stable";
 
-    if (!cmdLineSettingsJson.rp_only && is.string(bpSettings.header.min_engine_version))
-        bpSettings.header.min_engine_version = bpSettings.header.min_engine_version.replace("get", keyWord);
-    
-    if (!cmdLineSettingsJson.bp_only && is.string(rpSettings.header.min_engine_version))
-        rpSettings.header.min_engine_version = rpSettings.header.min_engine_version.replace("get", keyWord);
+    // if (!cmdLineSettingsJson.rp_only && is.string(bpSettings.header.min_engine_version))
+    //     bpSettings.header.min_engine_version = bpSettings.header.min_engine_version.replace("get", keyWord);
 
-    if ((!cmdLineSettingsJson.rp_only && is.string(bpSettings.header.min_engine_version) && bpSettings.header.min_engine_version.startsWith(keyWord)) || (!cmdLineSettingsJson.bp_only && is.string(rpSettings.header.min_engine_version)  && rpSettings.header.min_engine_version.startsWith(keyWord))) {
+    // if (!cmdLineSettingsJson.bp_only && is.string(rpSettings.header.min_engine_version))
+    //     rpSettings.header.min_engine_version = rpSettings.header.min_engine_version.replace("get", keyWord);
+
+    if ((!cmdLineSettingsJson.rp_only && is.string(bpSettings.header.min_engine_version) && bpSettings.header.min_engine_version.startsWith(keyWord)) || (!cmdLineSettingsJson.bp_only && is.string(rpSettings.header.min_engine_version) && rpSettings.header.min_engine_version.startsWith(keyWord))) {
         const keys = cmdLineSettingsJson.engineGetList;
         //[x,x,x]
         const engineList = keys.map(v => v.split(".").map(v => Number(v)));
 
-        const headersList = []
-        if(!cmdLineSettingsJson.rp_only) headersList.push(bpSettings.header)
-        if(!cmdLineSettingsJson.bp_only) headersList.push(rpSettings.header)
+        const headersList = [];
+        if (!cmdLineSettingsJson.rp_only) headersList.push(bpSettings.header);
+        if (!cmdLineSettingsJson.bp_only) headersList.push(rpSettings.header);
 
         const settingsList = headersList.filter(hdr => hdr.min_engine_version.startsWith(keyWord));
         for (let header of settingsList) {
             let versionsBack = 0;
 
-            if (header.min_engine_version.startsWith(keyWord + "-")) {
-                versionsBack = header.min_engine_version.replace(keyWord + "-", "");
+            if (header.min_engine_version.startsWith(keyWord + '-')) {
+                versionsBack = header.min_engine_version.replace(keyWord + '-', "");
                 if (!isNaN(versionsBack)) {
                     versionsBack = Number(versionsBack);
                 }
@@ -1706,17 +1757,40 @@ function fetchInfoApply () {
         }
     }
 
-    const moduleList = myFetch.promiseStack
-        .filter(obj => obj.success)
-        .map(obj => { return { site: obj.site, stable: obj.versions.stable }; });
+    const moduleList = bpSettings.moduleVersions//myFetch.promiseStack
+        .filter(obj => obj.success);
+    // .map(obj => { return { site: obj.site, stable: obj.versions.stable }; });
 
     //for now just latest... TODO: beta, rc, not latest
     debug.table("Dependency Module List", moduleList);
-    for (let needModVersion of bpSettings.dependencies.filter(obj => "module_name" in obj && [ "get", "stable" ].includes(obj.version))) {
+    for (let needModVersion of bpSettings.dependencies.filter(dependency => "module_name" in dependency && validVersionNames.includes(dependency.version.toLowerCase()))) {
 
-        let found = moduleList.find(obj => obj.site.endsWith(needModVersion.module_name));
+        let found = moduleList.find(mod => mod.module == needModVersion.module_name);
         if (found) {
-            needModVersion.version = found.stable.module;
+            console.log("needModVersion", needModVersion);
+            switch (needModVersion.version.toLowerCase()) {
+                case "latest":
+                case "stable": needModVersion.version = found.stable.module; break;
+                case "latestbeta":
+                case "latest_beta":
+                case "latest-beta":
+                case "beta": needModVersion.version = found.beta.module; break;
+                case "rc":
+                case "preview": needModVersion.version = found.preview.module; break;
+                case "preview_beta":
+                case "preview-beta":
+                case "previewbeta": needModVersion.version = found.previewBeta.module; break;
+                default:
+                    if (cmdLineSettingsJson.preview && cmdLineSettingsJson.beta) { needModVersion.version = found.previewBeta.module; break; }
+                    else
+                        if (cmdLineSettingsJson.beta) { needModVersion.version = found.beta.module; break; }
+                        else
+                            if (cmdLineSettingsJson.preview) { needModVersion.version = found.preview.module; break; }
+                            else
+                                needModVersion.version = found.stable.module; break;
+                    break;
+            }
+
             consoleColor.success("==>", needModVersion.module_name, " version:", needModVersion.version);
         }
         else consoleColor.error("xx> Matching Module-Version to Module-Name");
@@ -1734,21 +1808,62 @@ function mainAfterFetch () {
 
     for (let obj of myFetch.promiseStack) {
         consoleColor.log("==> Processing Data for " + obj.site);
+        // console.log(obj)
         let distTags = obj.data[ 'dist-tags' ];
+
+        //if (debug.debugOn) 
+        //console.log(Object.keys(obj.data.versions).reverse());
+        //let latestStableSearch = /^[^a-zA-Z]*$/
+        ///[0-9]*\.[0-9]*\.[0-9]*/i;
+        let latestBetaSearch = /[0-9]\.[0-9].*-beta\.[0-9]\.[0-9].*stable/i;
+        //let previewRcSearch = /[0-9]\.[0-9].*-rc\.[0-9]\.[0-9].*preview*/i;
+        //let previewBetaSearch = /[0-9]\.[0-9].*-beta\.[0-9]\.[0-9].*preview*/i;
+
+        const versionList = Object.keys(obj.data.versions);
+
+        //const latestStable = versionList
+        //.filter(v => latestStableSearch.test(v))
+        // .filter(v => latestStableSearch.test(v))
+        // .filter(v => !latestBetaSearch.test(v))
+        // .filter(v => !previewRcSearch.test(v))
+        // .filter(v => !previewBetaSearch.test(v))
+        //.reverse();
+        //console.log("Latest Stable", latestStable);
+
+        const latestBeta = versionList.filter(v => latestBetaSearch.test(v)).reverse();
+        //console.log("Latest Beta", latestBeta);
+
+        //const previewRc = versionList.filter(v => previewRcSearch.test(v)).reverse();
+        //console.log("Preview RC", previewRc);
+
+        //const previewBeta = versionList.filter(v => previewBetaSearch.test(v)).reverse();
+        //console.log("Preview Beta", previewBeta);
+
         obj.versions = {
+            success: obj.success,
+            module: obj.data?.name || obj.data[ "_id" ],
             stable: {
-                module: distTags.latest
+                module: distTags.latest,
+                engine: latestBeta.length ? latestBeta[ 0 ].split("-beta.")[ 1 ].split('-')[ 0 ] : false
             },
             beta: {
-                module: "beta" in distTags ? distTags.beta.split("-beta.")[ 0 ] + '-beta' : false,
-                engine: "beta" in distTags ? distTags.beta.split("-beta.")[ 1 ] : false
+                module: latestBeta.length ? latestBeta[ 0 ].split("-beta.")[ 0 ] + '-beta' : false,
+                engine: latestBeta.length ? latestBeta[ 0 ].split("-beta.")[ 1 ].split('-')[ 0 ] : false
             },
-            rc: {
-                module: "rc" in distTags ? distTags.rc.split("-")[ 0 ] + '-rc' : false,
-                engine: "rc" in distTags ? distTags.rc.split("-rc.")[ 1 ] : false
+            preview: {
+                module: distTags.rc.length ? distTags.rc.split('-rc.')[ 0 ] : false,
+                engine: distTags.rc.length ? distTags.rc.split("-rc.")[ 1 ].split('-')[ 0 ] : false
             },
-            time: Object.keys(obj.data.time).reverse()
+            previewBeta: {
+                module: distTags.beta.length ? distTags.beta.split("-beta.")[ 0 ] + '-beta' : false,
+                engine: distTags.beta.length ? distTags.beta.split("-beta.")[ 1 ].split('-')[ 0 ] : false
+            } //,time: Object.keys(obj.data.time).reverse()
         };
+        console.log(obj.versions);
+
+        if (!cmdLineSettingsJson.BP) cmdLineSettingsJson.BP = {};
+        if (!cmdLineSettingsJson.BP.moduleVersions) cmdLineSettingsJson.BP.moduleVersions = [];
+        cmdLineSettingsJson.BP.moduleVersions.push(obj.versions);
 
         const engines = Object.keys(obj.data.versions)
             .filter(v => v.endsWith('-stable'))
@@ -1761,6 +1876,7 @@ function mainAfterFetch () {
                 cmdLineSettingsJson.engineGetList = engines;
 
     }
+    //console.log(cmdLineSettingsJson.engineGetList);
     debug.table("==> min_engine_versions", cmdLineSettingsJson.engineGetList);
 
     for (let obj of myFetch.promiseStack) obj.versions.stable.engine = cmdLineSettingsJson.engineGetList[ 0 ];
@@ -1788,6 +1904,8 @@ function debugExport () {
     Debug.success("* Debug Files Exported");
 }
 //============================================================================
+
+
 main();
 //============================================================================
 //Go Home, the show is over
