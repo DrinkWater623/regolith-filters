@@ -1,5 +1,14 @@
 // @ts-check
-//=====================================================================
+const releaseVersion = "2024.12.29"
+/*
+=====================================================================
+Copyright (C) 2024 DrinkWater623/PinkSalt623/Update Block Dev  
+License: GPL-3.0-only
+URL: https://github.com/DrinkWater623
+========================================================================
+Intended for use with Regolith
+========================================================================
+*/
 // Global variables - Part 1
 //=====================================================================
 const fs = require("fs");
@@ -12,6 +21,7 @@ var argSettings = process.argv[ 2 ];
 /*
 Information:
     Author:     DrinkWater623/PinkSalt623
+    License:    GPL-3.0-only
     Contact:    Discord/GitHub @DrinkWater623 
 
     Purpose:    Create manifest.json from profile settings. 
@@ -39,6 +49,10 @@ Change Log:
     20240622 - NAA - bug... when min_engine_version is not a string
     20240624 - NAA = ad "capabilities": ["script_eval"],
     20240728 - NAA - global settings inside confile.json  "mani_fest":{}  outside of "regolith": {}
+    20241104 - NAA - minor logical bugs
+    20241224 - NAA - license in manifest and this file.
+    20241229 - NAA = add URL to metadata - change configs to use
+    
 TODO:
     () Make is so I can have a dev and rel pack icon - prob can use the data section to hold and use by name or settings has filename
 */
@@ -1166,11 +1180,11 @@ function isLiveResourcePackFolder () {
     }
 
     //Ok if png or tga files or lang files
-    if (fileList.some(obj => obj.parse.dir.startsWith = '/RP/textures/' && [ ".png", ".tga" ].includes(obj.parse.ext))) {
+    if (fileList.some(obj => obj.parse.dir.startsWith == '/RP/textures/' && [ ".png", ".tga" ].includes(obj.parse.ext))) {
         consoleColor.success("==> Found RP png/tga Files");
         return true;
     }
-    if (fileList.some(obj => obj.parse.dir.startsWith = '/RP/texts/' && obj.parse.ext == ".lang")) {
+    if (fileList.some(obj => obj.parse.dir.startsWith == '/RP/texts/' && obj.parse.ext == ".lang")) {
         consoleColor.success("==> Found RP .lang Files");
         return true; //TODO: make sure not emptyish
     }
@@ -1384,6 +1398,8 @@ function masterConfigSettingsCheck () {
     }
     //------------------------------------------------------------------------------------------
     cmdLineSettingsJson.author = cmdLineSettingsJson.author || configFileSettings.author || "Add Author Name Here";
+    cmdLineSettingsJson.url = cmdLineSettingsJson.url || "Add URL Here";
+    cmdLineSettingsJson.license = cmdLineSettingsJson.license || "Add License Here";    
     //------------------------------------------------------------------------------------------
     //----------------------------------------
     //Determine if BP and RP Exist
@@ -1464,26 +1480,28 @@ function manifestHeaders_set (pSettings) {
     const d = new Date();
     const DateTime = [ d.getFullYear(), d.getMonth() + 1, d.getDate(), d.getHours(), d.getMinutes(), d.getSeconds() ].join('.');
 
-    const packType = ((cmdLineSettingsJson.preview ? "§cPreview§r: " : "") + (cmdLineSettingsJson.beta ? "§6Beta§r: " : "")).trim();
+    const packType = ((cmdLineSettingsJson.preview ? " : §cPreview§r" : "") + (cmdLineSettingsJson.beta ? " : §6Beta§r" : " : §aStable§r")).trim();
 
     const defaultHeader = {
         name: (
-            pSettings.name ||
-            packType + ' ' + cmdLineSettingsJson.name + ' ' + pSettings.type ||
-            packType + ' ' + configFileSettings.name + pSettings.type
+            (pSettings.name ||
+                cmdLineSettingsJson.name ||
+                configFileSettings.name) + ' ' + pSettings.type + ' ' + packType
         ).trim().replace('  ', ' '),
         description: (
             (
                 pSettings.description ||
-                    pSettings.isScriptingFiles && cmdLineSettingsJson.beta ? "§6Requires Beta API§r" : '' + cmdLineSettingsJson.description + ' ' + pSettings.type ||
+                (cmdLineSettingsJson.description + ' ' + pSettings.type) ||
                 "<" + pSettings.type + " pack description here>")
-            + "\n§aBuild Date: " + DateTime+"§r"
+                + (pSettings.isScriptingFiles && cmdLineSettingsJson.beta ? "\n§6Requires Beta API§r" : '')
+                + "\n§aBuild Date: " + DateTime + "§r"
+                + ` §gby ${pSettings.author || cmdLineSettingsJson.author}§r`
         ).trim().replace('  ', ' '),
         uuid: pSettings.header_uuid || "new",
         version: pSettings.version || cmdLineSettingsJson.version || [ d.getFullYear() - 2000, d.getMonth() + 1, d.getDate() ],
         min_engine_version: pSettings.min_engine_version || cmdLineSettingsJson.min_engine_version || "get"
     };
-    const configHeader = {} || pSettings.header;
+    const configHeader = pSettings.header || {};
     pSettings.header = objectsMerge(configHeader, defaultHeader);
 
     if ([ "get", "new" ].includes(pSettings.header.uuid)) {
@@ -1573,10 +1591,10 @@ function manifestScriptModule_set (bpSettings) {
             language: "javascript",
             uuid: bpSettings.module_uuid || "get",
             version: [ 1, 0, 0 ],
-            entry:  !!bpSettings.js ? (`scripts/${bpSettings.js}.js`).replace('.js.js','.js') : 
-                    isFile("BP/scripts/index.js") ? "scripts/index.js" : 
-                    isFile("BP/scripts/main.js") ? "scripts/main.js" : 
-                    "Name/Path of your entry Script File Here"
+            entry: !!bpSettings.js ? (`scripts/${bpSettings.js}.js`).replace('.js.js', '.js') :
+                isFile("BP/scripts/index.js") ? "scripts/index.js" :
+                    isFile("BP/scripts/main.js") ? "scripts/main.js" :
+                        "Name/Path of your entry Script File Here"
         };
 
         bpSettings.module_script = objectsMerge(configScriptModule, defaultScriptModule);
@@ -1628,7 +1646,7 @@ function manifestParts_control (pSettings) {
 //=======================================================================
 function manifestBuild (pSettings) {
     debug.color("functionStart", "* buildManifest(" + pSettings.type + ")");
-
+    
     const manifest = {
         format_version: 2,
         header: pSettings.header,
@@ -1640,9 +1658,11 @@ function manifestBuild (pSettings) {
     //if (pSettings.dependencies && pSettings.dependencies.length) manifest.dependencies = pSettings.dependencies;
 
     manifest.metadata = {
-        "authors": [ pSettings.author || cmdLineSettingsJson.author ],
+        "authors": (pSettings.author || cmdLineSettingsJson.author || "Add author name here").split(','),
+        "url": pSettings.url || cmdLineSettingsJson.url || 'Add url here',
+        "license": pSettings.license || cmdLineSettingsJson.license || "GPL-3.0-only",
         "generated_with": {
-            "regolith_filter_mani_fest": [ "24.7.28" ]
+            "regolith_filter_mani_fest": [ releaseVersion ]
         }
     };
 
